@@ -1,0 +1,396 @@
+<style>
+  /* 隐藏自带流量卡片 */
+  .mt-4.w-full.mx-auto > div {
+    display: none;
+  }
+  /* 自定���字体, 注意需要在上方 JS 中引入相应字体 */
+  * {
+      font-family: 'MiSans';
+  }
+  h1, h2, h3, h4, h5 {
+      font-family: 'MiSans', sans-serif;
+  }
+
+  /* 不显示右上角语言切换按钮 */
+  [id="radix-:r0:"] {
+      display: none;
+  }
+
+  /* 不显示右上角主题切换按钮 */
+  [id="radix-:r2:"] {
+      display: none;
+  }
+</style>
+
+<script>
+  (function () {
+    /* ==================== 全局变量和配置 ==================== */
+    let trafficTimer = null;
+    let trafficCache = null;
+
+    const config = {
+      showTrafficStats: true,
+      insertPosition: 'after', // 可选：'after', 'before', 'replace'
+      interval: 60000,         // 60秒刷新周期
+      style: 1                 // 样式类型：1 或 2
+    };
+
+    /* ==================== 工具函数 ==================== */
+    function formatFileSize(bytes) {
+      if (bytes === 0) return { value: '0', unit: 'B' };
+      const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+      let unitIndex = 0;
+      let size = bytes;
+
+      while (size >= 1024 && unitIndex < units.length - 1) {
+        size /= 1024;
+        unitIndex++;
+      }
+
+      return {
+        value: size.toFixed(unitIndex === 0 ? 0 : 2),
+        unit: units[unitIndex]
+      };
+    }
+
+    function calculatePercentage(used, total) {
+      used = Number(used);
+      total = Number(total);
+
+      if (used > 1e15 || total > 1e15) {
+        used /= 1e10;
+        total /= 1e10;
+      }
+
+      return (used / total * 100).toFixed(1);
+    }
+
+    function formatDate(dateString) {
+      const date = new Date(dateString);
+      return date.toLocaleDateString('zh-CN', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      });
+    }
+
+    function safeSetTextContent(parent, selector, text) {
+      const el = parent.querySelector(selector);
+      if (el) {
+        el.textContent = text;
+      }
+    }
+
+    /* ==================== 渲染流量统计 ==================== */
+function renderTrafficStats(trafficData) {
+  const serverMap = new Map();
+
+  for (const cycleId in trafficData) {
+    const cycle = trafficData[cycleId];
+    if (!cycle.server_name || !cycle.transfer) continue;
+
+    for (const serverId in cycle.server_name) {
+      const serverName = cycle.server_name[serverId];
+      const transfer = cycle.transfer[serverId];
+      const max = cycle.max;
+      const from = cycle.from;
+      const to = cycle.to;
+      const next_update = cycle.next_update[serverId];
+
+      if (serverName && transfer !== undefined && max && from && to) {
+        serverMap.set(serverName, {
+          id: serverId,
+          transfer: transfer,
+          max: max,
+          name: cycle.name,
+          from: from,
+          to: to,
+          next_update: next_update
+        });
+      }
+    }
+  }
+
+  const isInline = !!document.querySelector('section.server-inline-list');
+  console.log(`[调试] 当前布局是 ${isInline ? 'inline' : 'standard'}`);
+  serverMap.forEach((serverData, serverName) => {
+    const targetElement = Array.from(document.querySelectorAll('section.grid.items-center.gap-2'))
+      .find(el => el.textContent.trim().includes(serverName));
+    if (!targetElement) {
+      //console.warn(`[renderTrafficStats] 未找到服务器 "${serverName}" (ID: ${serverData.id}) 的元素`);
+      return;
+    }
+
+    const usedFormatted = formatFileSize(serverData.transfer);
+    const totalFormatted = formatFileSize(serverData.max);
+    let percentage = calculatePercentage(serverData.transfer, serverData.max);
+    const fromFormatted = formatDate(serverData.from);
+    const toFormatted = formatDate(serverData.to);
+    const next_update = new Date(serverData.next_update).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" });
+    const uniqueClassName = 'traffic-stats-for-server-' + serverData.id;
+    let insertPosition = config.insertPosition;
+
+    const containerDiv = targetElement.closest('div');
+    let oldSection = containerDiv.querySelector('section.flex.items-center.w-full.justify-between.gap-1');
+    if (!oldSection) {
+      oldSection = containerDiv.querySelector('section.grid.grid-cols-5.items-center.gap-3');
+      insertPosition = 'after';
+    }
+    if (isInline) 
+    {
+      oldSection = containerDiv.querySelector('section.grid.grid-cols-9.items-center.gap-3');
+      insertPosition = 'after';
+    }
+    const existing = containerDiv.querySelector('.' + uniqueClassName);
+
+    // 处理超过100%的情况
+    const displayPercentage = percentage > 100 ? 100 : percentage;
+    const progressWidth = percentage > 100 ? '100%' : `${percentage}%`;
+    const progressColorClass = percentage > 100 ? 'bg-red-500' : 'bg-emerald-500';
+
+    if (config.showTrafficStats) {
+      if (existing) {
+        safeSetTextContent(existing, '.used-traffic', usedFormatted.value);
+        safeSetTextContent(existing, '.used-unit', usedFormatted.unit);
+        safeSetTextContent(existing, '.total-traffic', totalFormatted.value);
+        safeSetTextContent(existing, '.total-unit', totalFormatted.unit);
+        safeSetTextContent(existing, '.from-date', fromFormatted);
+        safeSetTextContent(existing, '.to-date', toFormatted);
+        safeSetTextContent(existing, '.percentage-value', displayPercentage + '%');
+        safeSetTextContent(existing, '.next-update', `next update: ${next_update}`);
+        const progressBar = existing.querySelector('.progress-bar');
+        if (progressBar) {
+          progressBar.style.width = progressWidth;
+          progressBar.classList.remove('bg-emerald-500', 'bg-red-500');
+          progressBar.classList.add(progressColorClass);
+        }
+        console.log(`[renderTrafficStats] 更新已存在的流量条目: ${serverName}`);
+      } else if (oldSection) {
+        const newElement = document.createElement('div');
+        newElement.classList.add('space-y-1.5', 'new-inserted-element', uniqueClassName);
+        newElement.style.width = '100%';
+        if (config.style === 1) {
+          newElement.innerHTML = `
+            <div class="flex items-center justify-between">
+              <div class="flex items-baseline gap-1">
+                <span class="text-[10px] font-medium text-neutral-800 dark:text-neutral-200 used-traffic">${usedFormatted.value}</span>
+                <span class="text-[10px] font-medium text-neutral-800 dark:text-neutral-200 used-unit">${usedFormatted.unit}</span>
+                <span class="text-[10px] text-neutral-500 dark:text-neutral-400">/ </span>
+                <span class="text-[10px] text-neutral-500 dark:text-neutral-400 total-traffic">${totalFormatted.value}</span>
+                <span class="text-[10px] text-neutral-500 dark:text-neutral-400 total-unit">${totalFormatted.unit}</span>
+              </div>
+              <div class="text-[10px] font-medium text-neutral-600 dark:text-neutral-300">
+                <span class="from-date">${fromFormatted}</span>
+                <span class="text-neutral-500 dark:text-neutral-400">-</span>
+                <span class="to-date">${toFormatted}</span>
+              </div>
+            </div>
+            <div class="relative h-1.5">
+              <div class="absolute inset-0 bg-neutral-100 dark:bg-neutral-800 rounded-full"></div>
+              <div class="absolute inset-0 ${progressColorClass} rounded-full transition-all duration-300 progress-bar" style="width: ${progressWidth};"></div>
+            </div>
+          `;
+        } else if (config.style === 2) {
+          newElement.innerHTML = `
+            <div class="flex items-center justify-between">
+              <div class="flex items-baseline gap-1">
+                <span class="text-[10px] font-medium text-neutral-800 dark:text-neutral-200 used-traffic">${usedFormatted.value}</span>
+                <span class="text-[10px] font-medium text-neutral-800 dark:text-neutral-200 used-unit">${usedFormatted.unit}</span>
+                <span class="text-[10px] text-neutral-500 dark:text-neutral-400">/ </span>
+                <span class="text-[10px] text-neutral-500 dark:text-neutral-400 total-traffic">${totalFormatted.value}</span>
+                <span class="text-[10px] text-neutral-500 dark:text-neutral-400 total-unit">${totalFormatted.unit}</span>
+              </div>
+              <span class="text-[10px] text-neutral-500 dark:text-neutral-400 percentage-value">${displayPercentage}%</span>
+            </div>
+            <div class="relative h-1.5">
+              <div class="absolute inset-0 bg-neutral-100 dark:bg-neutral-800 rounded-full"></div>
+              <div class="absolute inset-0 ${progressColorClass} rounded-full transition-all duration-300 progress-bar" style="width: ${progressWidth};"></div>
+            </div>
+            <div class="flex items-center justify-between">
+              <div class="text-[10px] text-neutral-500 dark:text-neutral-400">
+                <span class="from-date">${fromFormatted}</span>
+                <span class="text-neutral-500 dark:text-neutral-400">-</span>
+                <span class="to-date">${toFormatted}</span>
+              </div>
+              <span class="text-[10px] text-neutral-500 dark:text-neutral-400">next update: ${next_update}</span>
+            </div>
+          `;
+        }
+        if (insertPosition === 'before') oldSection.before(newElement);
+        else if (insertPosition === 'replace') oldSection.replaceWith(newElement);
+        else oldSection.after(newElement);
+        console.log(`[renderTrafficStats] 插入新流量条目: ${serverName}，插入方式: ${insertPosition}`);
+      }
+    } else {
+      if (existing) {
+        existing.remove();
+        console.log(`[renderTrafficStats] 已隐藏流量条目: ${serverName}`);
+      }
+    }
+  });
+}
+
+    /* ==================== 数据更新和缓存 ==================== */
+    function updateTrafficStats(force = false) {
+      const now = Date.now();
+      if (!force && trafficCache && (now - trafficCache.timestamp < config.interval)) {
+        console.log('[updateTrafficStats] 使用缓存数据');
+        renderTrafficStats(trafficCache.data);
+        return;
+      }
+
+      console.log('[updateTrafficStats] 正在请求新数据...');
+      fetch('/api/v1/service')
+        .then(res => res.json())
+        .then(data => {
+          if (!data.success) {
+            console.warn('[updateTrafficStats] 请求成功但返回数据异常');
+            return;
+          }
+          console.log('[updateTrafficStats] 成功获取新数据');
+          const trafficData = data.data.cycle_transfer_stats;
+          trafficCache = {
+            timestamp: now,
+            data: trafficData
+          };
+          renderTrafficStats(trafficData);
+        })
+        .catch(err => console.error('[updateTrafficStats] 获取失败:', err));
+    }
+
+    function startPeriodicRefresh() {
+      if (!trafficTimer) {
+        console.log('[startPeriodicRefresh] 启动周期刷新任务');
+        trafficTimer = setInterval(() => {
+          updateTrafficStats();
+        }, config.interval);
+      }
+    }
+
+    /* ==================== DOM 监听和初始化 ==================== */
+    function onDomChildListChange() {
+      console.log('[onDomChildListChange] 检测到DOM变化, 立即刷新');
+      updateTrafficStats();
+      if (!trafficTimer) {
+        console.log('[onDomChildListChange] 启动定时刷新');
+        startPeriodicRefresh();
+      }
+    }
+
+    const observer = new MutationObserver(mutations => {
+      for (const mutation of mutations) {
+        if (mutation.type === 'childList') {
+          const nodes = [...mutation.addedNodes, ...mutation.removedNodes];
+          const matched = nodes.some(node => {
+            if (node.nodeType !== 1 || !node.querySelectorAll) return false;
+            return Array.from(node.querySelectorAll('span.text-muted-foreground'))
+              .some(el => Array.from(el.classList).some(cls => cls.includes('text-[')));
+          });
+
+          if (matched) {
+            onDomChildListChange();
+            break;
+          }
+        }
+      }
+    });
+
+    const targetNode = document.querySelector('main') || document.body;
+
+    observer.observe(targetNode, {
+      childList: true,
+      subtree: true
+    });
+
+    updateTrafficStats(true);  // 初始强制刷新
+    startPeriodicRefresh();
+
+    window.addEventListener('beforeunload', () => {
+      if (trafficTimer) clearInterval(trafficTimer);
+      observer.disconnect();
+    });
+  })();
+    const selectorButton = '#root > div > main > div.mx-auto.w-full.max-w-5xl.px-0.flex.flex-col.gap-4.server-info > section > div.flex.justify-center.w-full.max-w-\\[200px\\] > div > div > div.relative.cursor-pointer.rounded-3xl.px-2\\.5.py-\\[8px\\].text-\\[13px\\].font-\\[600\\].transition-all.duration-500.text-stone-400.dark\\:text-stone-500';
+    const selectorSection = '#root > div > main > div.mx-auto.w-full.max-w-5xl.px-0.flex.flex-col.gap-4.server-info > section';
+
+    const selector3 = '#root > div > main > div.mx-auto.w-full.max-w-5xl.px-0.flex.flex-col.gap-4.server-info > div:nth-child(3)';
+    const selector4 = '#root > div > main > div.mx-auto.w-full.max-w-5xl.px-0.flex.flex-col.gap-4.server-info > div:nth-child(4)';
+
+    let hasClicked = false;
+    let divVisible = false;
+
+    function forceBothVisible() {
+    const div3 = document.querySelector(selector3);
+    const div4 = document.querySelector(selector4);
+    if (div3 && div4) {
+        div3.style.display = 'block';
+        div4.style.display = 'block';
+    }
+    }
+
+    function hideSection() {
+    const section = document.querySelector(selectorSection);
+    if (section) {
+        section.style.display = 'none';
+    }
+    }
+
+    function tryClickButton() {
+    const btn = document.querySelector(selectorButton);
+    if (btn && !hasClicked) {
+        btn.click();
+        hasClicked = true;
+        setTimeout(forceBothVisible, 500);
+    }
+    }
+
+    const observer = new MutationObserver(() => {
+    const div3 = document.querySelector(selector3);
+    const div4 = document.querySelector(selector4);
+
+    const isDiv3Visible = div3 && getComputedStyle(div3).display !== 'none';
+    const isDiv4Visible = div4 && getComputedStyle(div4).display !== 'none';
+
+    const isAnyDivVisible = isDiv3Visible || isDiv4Visible;
+
+    if (isAnyDivVisible && !divVisible) {
+        hideSection();
+        tryClickButton();
+    } else if (!isAnyDivVisible && divVisible) {
+        hasClicked = false;
+    }
+
+    divVisible = isAnyDivVisible;
+
+    if (div3 && div4) {
+        if (!isDiv3Visible || !isDiv4Visible) {
+        forceBothVisible();
+        }
+    }
+    });
+
+    const root = document.querySelector('#root');
+    if (root) {
+    observer.observe(root, {
+        childList: true,
+        attributes: true,
+        subtree: true,
+        attributeFilter: ['style', 'class']
+    });
+    }
+    /* 自定义字体, 注意需要同步修改下方 CSS 中的 font-family */
+  var link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = 'https://font.sec.miui.com/font/css?family=MiSans:400,700:MiSans'; // MiSans
+  // link.href = 'https://npm.elemecdn.com/lxgw-wenkai-screen-webfont@1.7.0/style.css'; // 霞鹜文楷, font-family: 'LXGW WenKai Screen'
+  document.head.appendChild(link);
+  /* ==================== 全局配置 ==================== */
+  window.ShowNetTransfer = "true";      // 卡片显示上下行流量
+  window.CustomLogo = '/apple-touch-icon.png'; /* 页面左上角和标题栏展示的 Logo, 换成你自己的 */
+  // window.DisableAnimatedMan = "true";   // 关闭动画人物插图
+  // window.CustomIllustration = 'https://img.028029.xyz/1734592545615.png'; // 替换人物插图
+  window.CustomDesc = "稳定求签";       // 自定义描述
+  window.CustomIllustration = 'https://s2.loli.net/2024/12/24/fj3EXY7umsyR9NW.webp'; /* 把基佬图换成你想换的图, 此处图抄袭自 https://misaka.se/ */
+  window.CustomLinks = '[{\"link\":\"https://blog.loadke.tech/\",\"name\":\"博客\"}]'; /* 自定义导航栏链接 */
+  window.ForceTheme = 'light'; /* 强制主题色, 可选值为 light 或 dark */ 
+</script>
